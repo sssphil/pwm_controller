@@ -40,102 +40,98 @@ int pwmFreq = 1;
 int pwmReso = 16;
 int pwmDuty = 32768;
 float pwmWidth = 1.e6 / pwmFreq / (1 << pwmReso) * pwmDuty; // pulse width 
-
+bool pwmInv = true;
 
 // === Web Server ===
 WebServer server(80);
 
-// === HTML ===
-String getHTML()
+// === HTML === size=1357
+char html[1500];
+const char* html_format = R"rawliteral(
+<!DOCTYPE html><html><body>
+<h2>ESP32C6 PWM Control</h2>
+<form action="/set_pwm" method="get">
+<label for="pin">pin:</label>
+<select id="pin" name="pin">
+<option value="0" %s>D0(0)</option>
+<option value="1" %s>D1(1)</option>
+<option value="2" %s>D2(2)</option>
+<option value="21" %s>D3(21)</option>
+<option value="22" %s>D4(22)</option>
+<option value="23" %s>D5(23)</option>
+<option value="16" %s>D6(16)</option>
+<option value="17" %s>D7(17)</option>
+<option value="19" %s>D8(19)</option>
+<option value="20" %s>D9(20)</option>
+<option value="18" %s>D10(18)</option>
+<option value="15" %s>LED(15)</option>
+</select><br>
+<input type="checkbox" id="flag" name="flag" %s/>
+<label for="flag">Invert output</label><br>
+<label for="value">Frequncy:</label>
+<input type="number" id="freq" name="freq" min="0" step="1" value="%d"/><br>
+<label for="value">Resolution:</label>
+<input type="number" id="reso" name="reso" min="0" step="1" value="%d"/><br>
+<label for="value">Duty:</label>
+<input type="number" id="duty" name="duty" min="0" step="1" value="%d"/>
+<button type="submit" name="action" value="duty">Configure by Duty</button><br>
+<label for="value">Width(us):</label>
+<input type="number" id="width" name="width" min="0" step="any" value="%f"/>
+<button type="submit" name="action" value="width">Configure by Width</button><br>
+<p>Tick:%fus</p>
+<p>High,Low:(%f, %f)us</p>
+<p>%s</p>
+</form>
+</body></html>
+)rawliteral";
+
+const char pin_options[] = {0, 1, 2, 21, 22, 23, 16, 17, 19, 20, 18, 15};
+
+void updateHTML()
 {
-  const char* head = R"rawliteral(
-    <!DOCTYPE html><html><body>
-    <h2>ESP32C6 PWM Control</h2>
-  )rawliteral";
-
-  const char* tail = R"rawliteral(
-    </body></html>
-  )rawliteral";
-
-
-  String html = "<form action=\"/set_pwm\" method=\"get\">\n";
-  
-  html += "  <label for=\"pin\">pin:</label>\n";
-  html += "  <select id=\"pin\" name=\"pin\">\n";
-
-  int pins[] = {0, 1, 2, 21, 22, 23, 16, 17,19, 20, 18, 15};
-  String labels[12];
-  for (int i=0; i < 11; i++)
+  bool selection[12] = {0};
+  char defaults[12][8];
+  for (int i = 0; i < 12; i ++)
   {
-    labels[i] = "D" + String(i) + "(" + String(pins[i]) + ")";
+    strcpy(defaults[i], pin_options[i] == pwmPin ? "selected" : "");
   }
-  labels[11] = "LED(15)";
 
-  for (int i = 0; i < 12; i++)
-  {
-    html += "<option value=\"" + String(pins[i]) + "\"";
-    if (pwmPin == pins[i]) html += " selected";
-    html += ">" + labels[i] + "</option>";
-  }
-  html += "    </select>\n";
+  float tick = 1.e6 / pwmFreq / (1 << pwmReso);
 
-
-  html += "  <label for=\"value\">Frequncy:</label><br>\n";
-  html += "  <input type=\"number\" id=\"freq\" name=\"freq\" min=\"0\" step=\"1\" value=\"" + String(pwmFreq) + "\"><br><br>\n";
-
-  html += "  <label for=\"value\">Resolution:</label><br>\n";
-  html += "  <input type=\"number\" id=\"reso\" name=\"reso\" min=\"0\" step=\"1\" value=\"" + String(pwmReso) + "\"><br><br>\n";
-
-  html += "  <label for=\"value\">Width(us):</label><br>\n";
-  html += "  <button type=\"submit\" name=\"action\" value=\"width\">Configure by Width</button>\n";
-  html += "  <input type=\"number\" id=\"width\" name=\"width\" min=\"0\" value=\"" + String(pwmWidth) + "\"><br><br>\n";
-
-  html += "  <label for=\"value\">Duty:</label><br>\n";
-  html += "  <button type=\"submit\" name=\"action\" value=\"duty\">Configure by Duty</button>\n";
-  html += "  <input type=\"number\" id=\"duty\" name=\"duty\" min=\"0\" step=\"1\" value=\"" + String(pwmDuty) + "\"><br><br>\n";
-
-  html += "</form>";
-
-  html += "<p>Tick: " + String(1000000. / pwmFreq / (1 << pwmReso)) + " us</p>";
-
-
-  return head + html + tail;
+  sprintf(html, html_format,
+    defaults[0], defaults[1], defaults[2], defaults[3], defaults[4], defaults[5], defaults[6],
+    defaults[7], defaults[8], defaults[9], defaults[10], defaults[11],
+    pwmInv ? "checked" : "", pwmFreq, pwmReso, pwmDuty, pwmWidth,
+    tick, tick * pwmDuty, tick * ((1 << pwmReso) - pwmDuty),
+    pwmInv ? "Output INVERTED" : "");
 }
 
 // === PWM Setup ===
 void setupPWM() {
-  Serial.printf("Setting up (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
+  Serial.printf("[setupPWM] Setting up (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
   bool res1 = ledcChangeFrequency(pwmPin, pwmFreq, pwmReso); // auto-assign channel, or use ledcAttachChannel(,,,)
   if (res1)
   {
-    Serial.print("ledcAttach(,,) Success. ");
+    Serial.println("\tledcAttach succeeded");
+    if (ledcOutputInvert(pwmPin, pwmInv) && pwmInv) Serial.println("Output INVERTED");
     bool res2 = ledcWrite(pwmPin, pwmDuty);
     if (res2)
     {
-      Serial.println("ledcWrite(,) Success.");
-      Serial.printf("Success (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
+      Serial.println("\tledcWrite succeeded.");
+      Serial.printf("[setupPWM] Success (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
       return;
     }
     else
-      Serial.println("ledcWrite(,) Failure.");
+      Serial.println("\tledcWrite FAILED");
   }
   else
-    Serial.println("ledcAttach(,,) Failure. ledcWrite(,) Skipped.");
-  Serial.printf("Failure (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
-}
-
-void changeDuty(int delta) {
-  pwmDuty += delta;
-  int maxDuty = (1 <<pwmReso) - 1;
-  if (pwmDuty > maxDuty) pwmDuty = maxDuty;
-  if (pwmDuty < 0) pwmDuty = 0;
-  ledcWrite(pwmPin, pwmDuty);
-  Serial.printf("Duty: %d / %d\n", pwmDuty, maxDuty);
+    Serial.println("\tledcAttach FAILED");
+  Serial.printf("[setupPWM] FAILURE (Pin, Freq, Reso, Duty): (%d, %d Hz, %d, %d)\n", pwmPin, pwmFreq, pwmReso, pwmDuty);
 }
 
 // === Handlers ===
 void handleRoot() {
-  String html = getHTML();
+  updateHTML();
   server.send(200, "text/html", html);
 }
 
@@ -144,26 +140,34 @@ void handleServer() {
   int pin = server.arg("pin").toInt();
   if (pin != pwmPin)
   {
-    Serial.println("Getting new Pin: GPIO" + String(pwmPin));
+    Serial.printf("[handleServer] Switching pwm pin: GPIO%d -> GPIO%d\n", pwmPin, pin);
     if (!ledcDetach(pwmPin)) 
     {
-      Serial.println("Detaching current pin failed: GPIO" + String(pwmPin));
+      Serial.println("\tDetaching current GPIO FAILED");
     }
     else
     {
-      Serial.println("Succesfully detached: GPIO" + String(pwmPin));
-      pwmPin = pin;
-      if (!ledcAttach(pwmPin, pwmFreq, pwmReso))
+      Serial.println("\tSuccesfully detached current GPIO");
+      if (pwmPin == 15) // turn LED off
       {
-        Serial.println("Failed to attach: GPIO" + String(pwmPin));
+        digitalWrite(pwmPin, LOW);
+      }
+
+      if (ledcAttach(pin, pwmFreq, pwmReso))
+      {
+        pwmPin = pin;
+        Serial.printf("[handleServer] Succeeded to set pwm on GPIO%d\n", pwmPin);
       }
       else
-        Serial.println("Succesfully attached: GPIO" + String(pwmPin));
+        Serial.printf("[handleServer] FAILED to set pwm on GPIO%d\n", pwmPin);
     }
   }
 
   // pwm params update
-  String action = server.arg("action");
+  if (server.hasArg("flag")) pwmInv = true;
+    else pwmInv = false;
+
+  String action = server.arg("action"); // configuration button by width or duty
   
   pwmFreq = server.arg("freq").toInt();
   pwmReso = server.arg("reso").toInt();
@@ -176,8 +180,6 @@ void handleServer() {
     pwmWidth = server.arg("width").toInt();
     // calc duty from width
     pwmDuty = int(pwmWidth / 1.e6 * pwmFreq * (1 << pwmReso));
-    // quantization error
-    pwmWidth = 1.e6 / pwmFreq / (1 << pwmReso) * pwmDuty;
   }
   else
   {
@@ -186,8 +188,9 @@ void handleServer() {
       int maxDuty = (1 <<pwmReso);
       if (pwmDuty > maxDuty) pwmDuty = maxDuty;
       if (pwmDuty < 0) pwmDuty = 0;
-      pwmWidth = 1.e6 / pwmFreq / (1 << pwmReso) * pwmDuty;
   }
+  // update width (even when using width due to quantization error)
+  pwmWidth = 1.e6 / pwmFreq / (1 << pwmReso) * pwmDuty;
     
   setupPWM();
 
@@ -205,39 +208,14 @@ void setup() {
 
   // Web server routes
   server.on("/", handleRoot);
-  // server.on("/set_freq", handleSetFreq);
-  // server.on("/set_duty", handleSetDuty);
   server.on("/set_pwm", handleServer);
   server.begin();
 
   // Initial PWM
   ledcAttach(pwmPin, pwmFreq, pwmReso);
   ledcWrite(pwmPin, pwmDuty);
-  setupPWM();
 }
 
 void loop() {
   server.handleClient();
-
-  //TODO input could use '30h' for hz and '60u' for us
-  if (0 && Serial.available()) {
-    char c = Serial.read();
-    if (c == '1') {
-      pwmFreq = 5;
-      setupPWM();
-      Serial.println("Serial: Set freq to 5 Hz");
-    } else if (c == '2') {
-      pwmFreq = 15;
-      setupPWM();
-      Serial.println("Serial: Set freq to 15 Hz");
-    } else if (c == '3') {
-      pwmFreq = 30;
-      setupPWM();
-      Serial.println("Serial: Set freq to 30 Hz");
-    } else if (c == '+') {
-      changeDuty(1);
-    } else if (c == '-') {
-      changeDuty(-1);
-    }
-  }
 }
